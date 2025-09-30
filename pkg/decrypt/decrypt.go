@@ -289,9 +289,33 @@ func (d *Decryptor) DecryptAll(outputDir string) ([]*DecryptedSection, error) {
 		return nil, fmt.Errorf("failed to find firmware sections: %w", err)
 	}
 
+	// First pass: Find and decrypt the manifest
+	var manifest *Manifest
+	for _, section := range sections {
+		if section.Unkn2 == 3060 {
+			sectionType := int(section.Unkn2 >> 12)
+			encryptedData := d.FirmwareData[section.DataOffset : section.DataOffset+section.Size]
+
+			key, iv, err := d.deriveEcovacsKey(sectionType, section.Size)
+			if err != nil {
+				continue
+			}
+
+			decrypted, err := d.decryptSection(encryptedData, key, iv)
+			if err != nil {
+				continue
+			}
+
+			decryptedUnpadded := d.removePKCS7Padding(decrypted)
+			manifest, _ = d.parseManifest(decryptedUnpadded)
+			break
+		}
+	}
+
+	// Second pass: Decrypt all sections with proper names
 	var results []*DecryptedSection
 
-	for _, section := range sections {
+	for i, section := range sections {
 		sectionType := int(section.Unkn2 >> 12)
 		encryptedData := d.FirmwareData[section.DataOffset : section.DataOffset+section.Size]
 
@@ -310,7 +334,7 @@ func (d *Decryptor) DecryptAll(outputDir string) ([]*DecryptedSection, error) {
 
 		decryptedUnpadded := d.removePKCS7Padding(decrypted)
 
-		outputFile := d.getSectionFilename(section)
+		outputFile := d.getSectionFilename(section, manifest, i)
 		fullPath := filepath.Join(outputDir, outputFile)
 
 		if err := os.WriteFile(fullPath, decryptedUnpadded, 0644); err != nil {
@@ -324,9 +348,8 @@ func (d *Decryptor) DecryptAll(outputDir string) ([]*DecryptedSection, error) {
 			OutputFilename: outputFile,
 		}
 
-		// Parse manifest if this is a manifest section
+		// Store manifest reference for manifest section
 		if section.Unkn2 == 3060 {
-			manifest, _ := d.parseManifest(decryptedUnpadded)
 			result.Manifest = manifest
 			d.extractManifestJSON(decryptedUnpadded, outputDir)
 		}
@@ -337,8 +360,37 @@ func (d *Decryptor) DecryptAll(outputDir string) ([]*DecryptedSection, error) {
 	return results, nil
 }
 
+// getExtensionFromType returns the appropriate file extension for a section type
+func getExtensionFromType(sectionType string) string {
+	switch sectionType {
+	case "sh_script":
+		return ".sh"
+	case "bin":
+		return ".bin"
+	case "fs":
+		return ".img"
+	case "img":
+		return ".img"
+	default:
+		return ".bin"
+	}
+}
+
 // getSectionFilename returns appropriate filename for a section
-func (d *Decryptor) getSectionFilename(section *Section) string {
+func (d *Decryptor) getSectionFilename(section *Section, manifest *Manifest, sectionIndex int) string {
+	// Manifest section (special case)
+	if section.Unkn2 == 3060 {
+		return "manifest.bin"
+	}
+
+	// If we have a manifest and valid index, use the section name and type
+	if manifest != nil && sectionIndex > 0 && sectionIndex <= len(manifest.Sections) {
+		manifestSection := manifest.Sections[sectionIndex-1]
+		ext := getExtensionFromType(manifestSection.Type)
+		return manifestSection.Name + ext
+	}
+
+	// Fallback to old naming scheme
 	return fmt.Sprintf("section_%d.bin", section.Unkn2)
 }
 
