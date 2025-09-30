@@ -1,0 +1,33 @@
+# Binaries
+ecovacs-firmware-tools
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Firmware files
+firmware/
+decrypted/
+downloads/
+*.bin
+*.fw
+
+# Go build artifacts
+/bin/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
