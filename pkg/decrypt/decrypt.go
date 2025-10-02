@@ -1,7 +1,6 @@
 package decrypt
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
@@ -289,31 +288,39 @@ func (d *Decryptor) DecryptAll(outputDir string) ([]*DecryptedSection, error) {
 		return nil, fmt.Errorf("failed to find firmware sections: %w", err)
 	}
 
-	// First pass: Find and decrypt the manifest
+	// First pass: Decrypt and parse the first section as the manifest
+	if len(sections) == 0 {
+		return nil, fmt.Errorf("no sections found")
+	}
+
 	var manifest *Manifest
-	for _, section := range sections {
-		if section.Unkn2 == 3060 {
-			sectionType := int(section.Unkn2 >> 12)
-			encryptedData := d.FirmwareData[section.DataOffset : section.DataOffset+section.Size]
+	firstSection := sections[0]
+	sectionType := int(firstSection.Unkn2 >> 12)
+	encryptedData := d.FirmwareData[firstSection.DataOffset : firstSection.DataOffset+firstSection.Size]
 
-			key, iv, err := d.deriveEcovacsKey(sectionType, section.Size)
-			if err != nil {
-				continue
-			}
+	key, iv, err := d.deriveEcovacsKey(sectionType, firstSection.Size)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive key for manifest: %w", err)
+	}
 
-			decrypted, err := d.decryptSection(encryptedData, key, iv)
-			if err != nil {
-				continue
-			}
+	decrypted, err := d.decryptSection(encryptedData, key, iv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt manifest: %w", err)
+	}
 
-			decryptedUnpadded := d.removePKCS7Padding(decrypted)
-			manifest, _ = d.parseManifest(decryptedUnpadded)
-			break
-		}
+	decryptedUnpadded := d.removePKCS7Padding(decrypted)
+	manifest, err = d.parseManifest(decryptedUnpadded)
+	if err != nil {
+		return nil, fmt.Errorf("first section is not a valid manifest: %w", err)
+	}
+
+	if len(manifest.Sections) == 0 {
+		return nil, fmt.Errorf("manifest contains no sections")
 	}
 
 	// Second pass: Decrypt all sections with proper names
 	var results []*DecryptedSection
+	manifestFound := false
 
 	for i, section := range sections {
 		sectionType := int(section.Unkn2 >> 12)
@@ -337,7 +344,19 @@ func (d *Decryptor) DecryptAll(outputDir string) ([]*DecryptedSection, error) {
 		outputFile := d.getSectionFilename(section, manifest, i)
 		fullPath := filepath.Join(outputDir, outputFile)
 
-		if err := os.WriteFile(fullPath, decryptedUnpadded, 0644); err != nil {
+		var dataToWrite []byte
+		if manifest != nil && i == 0 {
+			// For the manifest, write formatted JSON
+			prettyJSON, err := json.MarshalIndent(manifest, "", "  ")
+			if err != nil {
+				continue
+			}
+			dataToWrite = append(prettyJSON, '\n')
+		} else {
+			dataToWrite = decryptedUnpadded
+		}
+
+		if err := os.WriteFile(fullPath, dataToWrite, 0644); err != nil {
 			continue
 		}
 
@@ -349,9 +368,9 @@ func (d *Decryptor) DecryptAll(outputDir string) ([]*DecryptedSection, error) {
 		}
 
 		// Store manifest reference for manifest section
-		if section.Unkn2 == 3060 {
+		if manifest != nil && !manifestFound {
 			result.Manifest = manifest
-			d.extractManifestJSON(decryptedUnpadded, outputDir)
+			manifestFound = true
 		}
 
 		results = append(results, result)
@@ -378,9 +397,9 @@ func getExtensionFromType(sectionType string) string {
 
 // getSectionFilename returns appropriate filename for a section
 func (d *Decryptor) getSectionFilename(section *Section, manifest *Manifest, sectionIndex int) string {
-	// Manifest section (special case)
-	if section.Unkn2 == 3060 {
-		return "manifest.bin"
+	// If we have a manifest and this is the first section (index 0), it's the manifest
+	if manifest != nil && sectionIndex == 0 {
+		return "manifest.json"
 	}
 
 	// If we have a manifest and valid index, use the section name and type
@@ -394,27 +413,3 @@ func (d *Decryptor) getSectionFilename(section *Section, manifest *Manifest, sec
 	return fmt.Sprintf("section_%d.bin", section.Unkn2)
 }
 
-// extractManifestJSON tries to extract JSON from decrypted manifest
-func (d *Decryptor) extractManifestJSON(decryptedData []byte, outputDir string) bool {
-	for startPos := 0; startPos < len(decryptedData)-1; startPos++ {
-		if decryptedData[startPos] == '{' || decryptedData[startPos] == '[' {
-			decoder := json.NewDecoder(bytes.NewReader(decryptedData[startPos:]))
-
-			var manifest interface{}
-			err := decoder.Decode(&manifest)
-			if err == nil {
-				prettyJSON, err := json.MarshalIndent(manifest, "", "  ")
-				if err != nil {
-					continue
-				}
-
-				manifestPath := filepath.Join(outputDir, "manifest.json")
-				if err := os.WriteFile(manifestPath, prettyJSON, 0644); err != nil {
-					return false
-				}
-				return true
-			}
-		}
-	}
-	return false
-}

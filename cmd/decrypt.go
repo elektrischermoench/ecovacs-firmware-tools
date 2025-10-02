@@ -93,29 +93,34 @@ func runDecrypt(opts *decryptOptions, args []string) {
 	fmt.Println(renderSuccess(fmt.Sprintf("Found %d firmware sections", len(sections))))
 	fmt.Println()
 
-	// Try to decrypt manifest first to get section names
+	// Decrypt the first section as the manifest
 	var manifest *decrypt.Manifest
 	sectionNameMap := make(map[uint16]string)
 
-	for _, section := range sections {
-		if section.Unkn2 == 3060 { // Manifest section
-			sectionType := int(section.Unkn2 >> 12)
-			encryptedData := decryptor.FirmwareData[section.DataOffset : section.DataOffset+section.Size]
+	if len(sections) > 0 {
+		firstSection := sections[0]
+		sectionType := int(firstSection.Unkn2 >> 12)
+		encryptedData := decryptor.FirmwareData[firstSection.DataOffset : firstSection.DataOffset+firstSection.Size]
 
-			key, iv, err := decryptor.DeriveKey(sectionType, section.Size)
+		key, iv, err := decryptor.DeriveKey(sectionType, firstSection.Size)
+		if err == nil {
+			decrypted, err := decryptor.DecryptSection(encryptedData, key, iv)
 			if err == nil {
-				if decrypted, err := decryptor.DecryptSection(encryptedData, key, iv); err == nil {
-					manifest, _ = decryptor.ParseManifest(decrypted)
-					if manifest != nil {
-						// Map sections by order: section[0] = manifest, section[i+1] = manifest.sections[i]
-						sectionNameMap[sections[0].Unkn2] = "manifest"
-						for i := 0; i < len(manifest.Sections) && i+1 < len(sections); i++ {
-							sectionNameMap[sections[i+1].Unkn2] = manifest.Sections[i].Name
-						}
-					}
+				manifest, err = decryptor.ParseManifest(decrypted)
+				if err != nil {
+					exitWithError("First section is not a valid manifest: %v", err)
 				}
+
+				// Map sections by order: section[0] = manifest, section[i+1] = manifest.sections[i]
+				sectionNameMap[sections[0].Unkn2] = "manifest"
+				for i := 0; i < len(manifest.Sections) && i+1 < len(sections); i++ {
+					sectionNameMap[sections[i+1].Unkn2] = manifest.Sections[i].Name
+				}
+			} else {
+				exitWithError("Failed to decrypt manifest: %v", err)
 			}
-			break
+		} else {
+			exitWithError("Failed to derive key for manifest: %v", err)
 		}
 	}
 

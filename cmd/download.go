@@ -12,6 +12,7 @@ import (
 
 type downloadOptions struct {
 	models       string
+	modules      string
 	server       string
 	downloadFlag bool
 	downloadDir  string
@@ -52,6 +53,7 @@ Examples:
 	}
 
 	cmd.Flags().StringVarP(&opts.models, "models", "m", opts.models, "Comma-separated model IDs to check")
+	cmd.Flags().StringVar(&opts.modules, "modules", "", "Comma-separated firmware modules to check (e.g., 'fw0,mcu,AIConfig')")
 	cmd.Flags().StringVar(&opts.server, "server", opts.server, "Override default server")
 	cmd.Flags().BoolVar(&opts.downloadFlag, "download", false, "Download found firmware files")
 	cmd.Flags().StringVarP(&opts.downloadDir, "output", "o", opts.downloadDir, "Output directory for downloads")
@@ -92,6 +94,15 @@ func runDownload(opts *downloadOptions) {
 				Name:            fmt.Sprintf("Unknown Model %s", model),
 				FirmwareModules: []string{"fw0", "AIConfig"},
 			}
+		}
+
+		// Override firmware modules if specified by user
+		if opts.modules != "" {
+			moduleList := strings.Split(opts.modules, ",")
+			for i := range moduleList {
+				moduleList[i] = strings.TrimSpace(moduleList[i])
+			}
+			modelConfig.FirmwareModules = moduleList
 		}
 
 		fmt.Println(infoStyle.Render(fmt.Sprintf("Checking %s (%s)", modelConfig.Name, model)))
