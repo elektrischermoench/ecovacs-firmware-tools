@@ -174,7 +174,7 @@ func (d *Decryptor) FindSections() ([]*Section, error) {
 			continue
 		}
 
-		if section.Unkn1 != 1 || section.Type != 1 {
+		if (section.Unkn1 != 1 && section.Unkn1 != 2) || section.Type != 1 {
 			offset++
 			continue
 		}
